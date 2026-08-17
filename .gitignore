@@ -1,0 +1,6 @@
+.env
+state.json
+__pycache__/
+*.pyc
+*.har
+cookies.txt
