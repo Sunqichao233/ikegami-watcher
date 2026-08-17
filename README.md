@@ -887,9 +887,20 @@ python monitor.py --weeks 8        # 持续监控，向后扫 8 周
 | `--once` | — | 扫描一次后退出 |
 | `--weeks N` | 4 | 向后扫描几周 |
 | `--interval N` | 900 | 轮询间隔秒（含 ±120 秒随机抖动） |
-| `--quiet` | — | 只在有新空位时输出明细 |
+| `--state PATH` | `state.json` | 状态文件位置 |
+| `--ignore-quiet` | — | 忽略静默时段 |
 
-环境变量 `IKEGAMI_CAR_MODEL` 可改車種（默认 `301`）。
+### 环境变量
+
+| 变量 | 必填 | 说明 |
+|---|---|---|
+| `IKEGAMI_ID` / `IKEGAMI_PW` | ✅ | 教習生番号与密码 |
+| `IKEGAMI_CAR_MODEL` | — | 車種代码，默认 `301` |
+| `IKEGAMI_WEEKDAY_ZIGEN` | — | 平日时限，如 `11,12` |
+| `IKEGAMI_WEEKEND_ZIGEN` | — | 周末时限，空 = 全天 |
+| `IKEGAMI_FULLDAY` | — | 全天区间，如 `20260808-20260816` |
+| `IKEGAMI_QUIET_FROM` / `_TO` | — | 静默时段（JST 小时），默认 `0` / `7` |
+| `SERVERCHAN_KEY` / `BARK_URL` / `NTFY_URL` / `PUSHPLUS_TOKEN` / `WECOM_WEBHOOK` / `TELEGRAM_URL` / `DISCORD_WEBHOOK` | — | 推送渠道，至少填一个 |
 
 ### 实现要点
 
@@ -898,6 +909,8 @@ python monitor.py --weeks 8        # 持续监控，向后扫 8 周
 - 翻周之间 sleep 1.5–3.5 秒随机
 - 两张转置表的空位按 `date-zigen` 去重
 - 状态存 `state.json`，只对**新增**空位告警
+- **静默时段**（JST 0:00–7:00）内直接退出／挂起，不扫描也不通知
+- 推送前检查业务错误码，而非只看 HTTP 状态
 - 凭据只走环境变量，不落盘（`.gitignore` 已排除 `.env` / `state.json`）
 
 ### ⚠️ 已知限制
@@ -907,119 +920,6 @@ python monitor.py --weeks 8        # 持续监控，向后扫 8 周
 | **単一セッション制約** | 脚本运行时会踢掉浏览器登录，反之亦然 |
 | 登录后入口未验证 | `open_calendar()` 直接 POST `p03a`，可能需要先过菜单页 |
 | 未实现自动预约 | 仅监控。`confirm` 之后的最终提交端点尚未抓到 |
-
----
-
-## 8.6 ☁ 云端无人值守（GitHub Actions）
-
-不依赖本机开机，免费，无需服务器。定义见 `.github/workflows/watch.yml`。
-
-### ⚠️ 先理解这个限制
-
-**単一セッション制約**（§5.5）意味着云端脚本与你的浏览器**不能同时在线**：
-
-- 云端运行时（每次约 30–60 秒）会踢掉你浏览器的登录
-- 你正在浏览器里操作时，那一次云端运行会失败
-
-因缓解手段有限，实际做法是：**接受它**。脚本每次都重新登录，
-被踢掉也只影响单次；而你主动登录的时间通常很短。
-若要长时间自己使用，去 Actions 页面临时 **Disable workflow**。
-
-### 部署步骤
-
-**1. 建一个私有仓库**，把这些文件推上去：
-
-```
-monitor.py
-requirements.txt
-.github/workflows/watch.yml
-```
-
-> 必须是 **Private**。虽然凭据走 Secrets 不入库，但私有仓库更稳妥。
-
-**2. 配置 Secrets** — 仓库 → Settings → Secrets and variables → Actions → New repository secret
-
-| 名称 | 必填 | 内容 |
-|---|---|---|
-| `IKEGAMI_ID` | ✅ | 教習生番号 |
-| `IKEGAMI_PW` | ✅ | 密码 |
-| `SERVERCHAN_KEY` | — | Server酱 SendKey |
-| `BARK_URL` | — | `https://api.day.app/xxxxx` |
-| `NTFY_URL` | — | `https://ntfy.sh/你的topic` |
-| `PUSHPLUS_TOKEN` | — | PushPlus token |
-
-推送渠道至少填一个，否则发现空位也无处通知。
-
-**3. 手动跑一次验证** — Actions → 空位监控 → Run workflow
-
-日志里应出现：
-
-```
-[08-03 14:22 JST] 扫描 4 周 → 空位 31 个 / 命中 7 个 / 新增 7 个
-  ✓ Server酱 — 200 OK
-```
-
-### 静默时段（JST 0:00–7:00 不运行）
-
-**两层保险**：
-
-1. **cron 层** — 只在 UTC 22:00–14:59 触发，即 JST 7:00–24:00
-   ```yaml
-   - cron: '*/15 22,23 * * *'   # JST 07:00–08:59
-   - cron: '*/15 0-14 * * *'    # JST 09:00–23:59
-   ```
-2. **脚本层** — `in_quiet_hours()` 用 `ZoneInfo("Asia/Tokyo")` 再判一次，
-   静默时段内直接退出。因为 GitHub 的 cron **并不准时**，
-   高峰期可能延迟 15 分钟以上，可能溢出到静默时段。
-
-改时段：设环境变量 `IKEGAMI_QUIET_FROM` / `IKEGAMI_QUIET_TO`（0–23 的整数）。
-
-### 状态持久化
-
-Actions 每次是全新容器，`state.json` 不会自动保留 ——
-用 `actions/cache` 在运行间传递，避免同一个空位重复通知。
-
-```yaml
-key: ikegami-state-${{ github.run_id }}   # 每次存新 key
-restore-keys: ikegami-state-              # 恢复时前缀匹配最近一个
-```
-
-> Cache 7 天未使用会被清理。真被清了也只是重复通知一次，不影响功能。
-
-### 用量估算
-
-| 项 | 值 |
-|---|---|
-| 触发频率 | 每 15 分钟（JST 7:00–24:00） |
-| 每天次数 | 约 68 次 |
-| 单次耗时 | 约 1 分钟 |
-| **每月分钟数** | **约 2000** |
-
-GitHub 私有仓库免费额度为 **2000 分钟/月** —— 刚好卡在边缘。
-
-**若超额**，任选其一：
-
-- 频率降到 `*/20` 或 `*/30`（够用，空位来自他人取消，是小时级事件）
-- `--weeks 2` 减少扫描周数，缩短单次耗时
-- 仓库设为 Public（公开仓库 Actions 无限量；Secrets 不会泄露，
-  但代码公开——本项目无敏感逻辑，可接受）
-
-### 其他部署方式
-
-| 方式 | 成本 | 适合 |
-|---|---|---|
-| **GitHub Actions** | 免费 | ✅ 推荐，零维护 |
-| VPS + cron/systemd | ~$5/月 | 要完全掌控、频率更高 |
-| 云函数（阿里云FC / 腾讯云SCF） | 免费额度内 | 已有云账号 |
-| 树莓派 / 旧手机 | 电费 | 家里有闲置设备 |
-
-VPS 的话直接常驻运行即可，静默时段脚本自己会挂起：
-
-```bash
-python monitor.py --weeks 4 --interval 900
-```
-
----
 
 ## 9. 变更记录
 
@@ -1035,5 +935,5 @@ python monitor.py --weeks 4 --interval 900
 | 2026-07-31 | **找到官方邮件通知**（§5.8）。三种空位相关邮件（すぐ来て／乗れるよ／見てみて）**已全部启用**。方案重定位：官方邮件为主，脚本降为兜底（§8.2b）。待验证邮箱是否真能收到 |
 | 2026-07-31 | 实现 **`ikegami-watcher.user.js`**（§8.4）。以「次の週↔前の週」往返导航替代刷新；筛选条件为平日 19:00/20:00 + 周末全天；支持声音／桌面通知／标题闪烁／Bark／Telegram／Discord／自定义 Webhook |
 | 2026-08-03 | 油猴脚本 v1.3.0：新增 `fullDayRanges`（8/8–8/16 全天监控）、日志跨页面持久化、发送结果诊断（检查业务错误码而非仅 HTTP 状态）、「现况」与「复制日志」按钮 |
-| 2026-08-03 | **`monitor.py` 改造为无人值守版**：加入推送渠道、JST 静默时段（0:00–7:00）、与油猴一致的筛选逻辑。新增 **GitHub Actions 部署**（§8.6），免费云端 24 小时监控 |
+| 2026-08-03 | **`monitor.py` 改造为常驻版**：加入推送渠道、JST 静默时段（0:00–7:00）、与油猴一致的筛选逻辑 |
 | 2026-08-03 | 油猴脚本 **v1.4.0：图形化条件设置**。星期 × 时限 7×12 勾选网格 + 多条特定日期区间（每条可独立选时限）。配置存 `localStorage.ikg_rules`，取代原先写死在 `CFG` 里的 `weekdayZigen` / `weekendZigen` / `fullDayRanges` |

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-池上自動車教習所 予約システム — 空位监控（无人值守版）
+池上自動車教習所 予約システム — 空位监控
 
-本地:
-    python monitor.py --once
-    python monitor.py --weeks 4 --interval 900
+    python monitor.py --once              # 扫描一次
+    python monitor.py --weeks 4           # 常驻监控
 
-云端（GitHub Actions 等）:
-    python monitor.py --once --state state.json
+凭据与推送渠道全部走环境变量，详见 README §8.5。
+静默时段（JST 0:00–7:00）内不扫描也不通知。
 
 ⚠️ 单一会话制约：本脚本运行时会踢掉浏览器里的登录，反之亦然。
 ⚠️ 绝不重复提交同一请求（等同于按 F5），会触发 EC05。
@@ -359,7 +358,7 @@ def main() -> int:
 
     state_path = Path(args.state)
 
-    # 静默时段：直接退出，云端定时器无需为此单独配置
+    # 静默时段：--once 模式下直接退出；常驻模式在循环末尾挂起
     if not args.ignore_quiet and in_quiet_hours():
         print(f"[{now_jst():%H:%M} JST] 静默时段 "
               f"{QUIET_FROM:02d}:00–{QUIET_TO:02d}:00，跳过本次")
